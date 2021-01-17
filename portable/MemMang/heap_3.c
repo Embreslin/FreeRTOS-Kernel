@@ -54,41 +54,58 @@
 #endif
 
 /*-----------------------------------------------------------*/
+#if defined(__TEST__)
+#include <stdio.h>
+BaseType_t mallocFail = pdFALSE;
+#endif
 
-void * pvPortMalloc( size_t xWantedSize )
+void *pvPortMalloc( size_t xWantedSize )
 {
-    void * pvReturn;
+	void *pvReturn;
+	static uint8_t fail_on_true = 0;
+	printf("  +malloc_fail %d\n", mallocFail);
+	if (mallocFail > 0) {
+		pvReturn = NULL;
+		fail_on_true = 0;
+		mallocFail--;
+	} else {
+		if (mallocFail < 0) {
+			if (!fail_on_true)
+				mallocFail++;
+		fail_on_true = 1;
+		}
+		if (fail_on_true)
+			mallocFail++;
+		vTaskSuspendAll();
+		{
+			pvReturn = malloc( xWantedSize );
+			traceMALLOC( pvReturn, xWantedSize );
+		}
+		( void ) xTaskResumeAll();
+	}
+	#if( configUSE_MALLOC_FAILED_HOOK == 1 )
+	{
+		if( pvReturn == NULL )
+		{
+			extern void vApplicationMallocFailedHook( void );
+			vApplicationMallocFailedHook();
+		}
+	}
+	#endif
 
-    vTaskSuspendAll();
-    {
-        pvReturn = malloc( xWantedSize );
-        traceMALLOC( pvReturn, xWantedSize );
-    }
-    ( void ) xTaskResumeAll();
-
-    #if ( configUSE_MALLOC_FAILED_HOOK == 1 )
-        {
-            if( pvReturn == NULL )
-            {
-                extern void vApplicationMallocFailedHook( void );
-                vApplicationMallocFailedHook();
-            }
-        }
-    #endif
-
-    return pvReturn;
+	return pvReturn;
 }
 /*-----------------------------------------------------------*/
 
-void vPortFree( void * pv )
+void vPortFree( void *pv )
 {
-    if( pv )
-    {
-        vTaskSuspendAll();
-        {
-            free( pv );
-            traceFREE( pv, 0 );
-        }
-        ( void ) xTaskResumeAll();
-    }
+	if( pv )
+	{
+		vTaskSuspendAll();
+		{
+			free( pv );
+			traceFREE( pv, 0 );
+		}
+		( void ) xTaskResumeAll();
+	}
 }
