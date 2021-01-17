@@ -62,94 +62,150 @@ not provided their own. */
 /* Records the nesting depth of calls to portENTER_CRITICAL(). */
 UBaseType_t uxCriticalNesting = 0xef;
 
-#if configKERNEL_INTERRUPT_PRIORITY != 1
-	#error If configKERNEL_INTERRUPT_PRIORITY is not 1 then the #32 in the following macros needs changing to equal the portINTERRUPT_BITS value, which is ( configKERNEL_INTERRUPT_PRIORITY << 5 )
+/* Records the nesting depth of ISRs being processed. */
+volatile UBaseType_t uxISRProcNesting = 0;
+
+/* Records if a Yield has been delayed to due to ISR or Tick processing. */
+volatile UBaseType_t uxYieldDelayed = pdFALSE;
+
+//#if configKERNEL_INTERRUPT_PRIORITY != 1
+//	#error If configKERNEL_INTERRUPT_PRIORITY is not 1 then the #32 in the following macros needs changing to equal the portINTERRUPT_BITS value, which is ( configKERNEL_INTERRUPT_PRIORITY << 5 )
+//#endif
+#define STRINGIFY(x)	#x
+#define STRINGIFY_E(x)	STRINGIFY(x)
+/* NB. restoring of SPLIM requires the stack to be in the lower 32KB of address space
+ * this isn't really an imposition as all heck breaks loose if the the stack is in the upper address space - though legal
+ */
+
+#define portSAVE_CONTEXTstart \
+		"PUSH	SR \n" /* Save the SR used by the task.... */ \
+		"PUSH	W0 \n" /* ....then disable interrupts. */ \
+		"MOV #" STRINGIFY_E(configKERNEL_INTERRUPT_PRIORITY) " << 5, W0 \n" \
+		"MOV	W0, SR \n" \
+		"PUSH	W1 \n" /* Save registers to the stack. */ \
+		"PUSH.D	W2 \n" \
+		"PUSH.D	W4 \n" \
+		"PUSH.D	W6 \n" \
+		"PUSH.D W8 \n" \
+		"PUSH.D W10 \n" \
+		"PUSH.D	W12 \n" \
+		"PUSH	W14 \n" \
+		"PUSH	RCOUNT \n" \
+		"PUSH	TBLPAG \n" \
+
+#define portSAVE_CONTEXTdsp \
+		"PUSH	ACCAL \n" \
+		"PUSH	ACCAH \n" \
+		"PUSH	ACCAU \n" \
+		"PUSH	ACCBL \n" \
+		"PUSH	ACCBH \n" \
+		"PUSH	ACCBU \n" \
+
+#define portSAVE_CONTEXTdo \
+		"PUSH	DCOUNT \n" \
+		"PUSH	DOSTARTL \n" \
+		"PUSH	DOSTARTH \n" \
+		"PUSH	DOENDL \n" \
+		"PUSH	DOENDH \n" \
+
+#ifdef __HAS_EDS__
+	#define portSAVE_CONTEXTmem \
+		"PUSH	CORCON \n" \
+		"PUSH	DSRPAG \n" \
+		"PUSH   DSWPAG \n" \
+
+#else
+	#define portSAVE_CONTEXTmem \
+		"PUSH	CORCON \n" \
+		"PUSH	PSVPAG \n" \
+
 #endif
+
+#define portSAVE_CONTEXTend \
+		"MOV	_uxCriticalNesting, W0 \n" /* Save the critical nesting counter for the task. */ \
+		"PUSH	W0 \n" \
+		"PUSH	SPLIM \n" \
+		"MOV	_pxCurrentTCB, W0 \n" /* Save the new top of stack into the TCB. */ \
+		"MOV	W15, [W0] \n"
+
+#define portRESTORE_CONTEXTend \
+		"MOV    _pxCurrentTCB, W0 \n" /* Get the saved TCB. */ \
+		"MOV    [W0], W0 \n" \
+		"MOV     #7 << 5, W2 \n" /* disable interrupts to set SPLIM and stack*/ \
+		"MOV    W2, SR \n" /* this needs +1 instr before interrupts are disabled */ \
+		"MOV    [--W0], W1 \n" \
+		"MOV    W1, SPLIM \n" /* the're really disabled now */ \
+		"MOV    W0, W15 \n" \
+		"MOV #" STRINGIFY_E(configKERNEL_INTERRUPT_PRIORITY) " << 5, W2 \n" \
+		"MOV    W2, SR \n" \
+		"POP    W0 \n" /* Restore the critical nesting counter for the task. */ \
+		"MOV    W0, _uxCriticalNesting \n" \
+
+#ifdef __HAS_EDS__
+	#define portRESTORE_CONTEXTmem \
+		"POP	DSWPAG \n" \
+		"POP    DSRPAG \n" \
+		"POP	CORCON \n" \
+
+#else
+	#define portRESTORE_CONTEXTmem																			\
+		"POP	PSVPAG					\n"																	\
+		"POP	CORCON					\n"																	\
+
+#endif
+
+#define portRESTORE_CONTEXTdo \
+		"POP	DOENDH \n" \
+		"POP	DOENDL \n" \
+		"POP	DOSTARTH \n" \
+		"POP	DOSTARTL \n" \
+		"POP	DCOUNT \n" \
+
+#define portRESTORE_CONTEXTdsp \
+		"POP	ACCBU \n" \
+		"POP	ACCBH \n" \
+		"POP	ACCBL \n" \
+		"POP	ACCAU \n" \
+		"POP	ACCAH \n" \
+		"POP	ACCAL \n" \
+
+#define portRESTORE_CONTEXTstart \
+		"POP	TBLPAG \n" \
+		"POP	RCOUNT \n" /* Restore the registers from the stack. */ \
+		"POP	W14 \n" \
+		"POP.D	W12 \n" \
+		"POP.D	W10 \n" \
+		"POP.D	W8 \n" \
+		"POP.D	W6 \n" \
+		"POP.D	W4 \n" \
+		"POP.D	W2 \n" \
+		"POP.D	W0 \n" \
+		"POP	SR \n" \
 
 #if defined( __PIC24E__ ) || defined ( __PIC24F__ ) || defined( __PIC24FK__ ) || defined( __PIC24H__ )
-
-    #ifdef __HAS_EDS__
-		#define portRESTORE_CONTEXT()																						\
-					asm volatile(	"MOV	_pxCurrentTCB, W0		\n"	/* Restore the stack pointer for the task. */		\
-							"MOV	[W0], W15				\n"																\
-							"POP	W0						\n"	/* Restore the critical nesting counter for the task. */	\
-							"MOV	W0, _uxCriticalNesting	\n"																\
-							"POP	DSWPAG					\n"																\
-							"POP    DSRPAG					\n"																\
-							"POP	CORCON					\n"																\
-							"POP	TBLPAG					\n"																\
-							"POP	RCOUNT					\n"	/* Restore the registers from the stack. */					\
-							"POP	W14						\n"																\
-							"POP.D	W12						\n"																\
-							"POP.D	W10						\n"																\
-							"POP.D	W8						\n"																\
-							"POP.D	W6						\n"																\
-							"POP.D	W4						\n"																\
-							"POP.D	W2						\n"																\
-							"POP.D	W0						\n"																\
-							"POP	SR						  " );
-	#else /* __HAS_EDS__ */
-		#define portRESTORE_CONTEXT()																						\
-			asm volatile(	"MOV	_pxCurrentTCB, W0		\n"	/* Restore the stack pointer for the task. */				\
-							"MOV	[W0], W15				\n"																\
-							"POP	W0						\n"	/* Restore the critical nesting counter for the task. */	\
-							"MOV	W0, _uxCriticalNesting	\n"																\
-							"POP	PSVPAG					\n"																\
-							"POP	CORCON					\n"																\
-							"POP	TBLPAG					\n"																\
-							"POP	RCOUNT					\n"	/* Restore the registers from the stack. */					\
-							"POP	W14						\n"																\
-							"POP.D	W12						\n"																\
-							"POP.D	W10						\n"																\
-							"POP.D	W8						\n"																\
-							"POP.D	W6						\n"																\
-							"POP.D	W4						\n"																\
-							"POP.D	W2						\n"																\
-							"POP.D	W0						\n"																\
-							"POP	SR						  " );
-		#endif /* __HAS_EDS__ */
-#endif /* MPLAB_PIC24_PORT */
-
-#if defined( __dsPIC30F__ ) || defined( __dsPIC33F__ )
-
-	#define portRESTORE_CONTEXT()																						\
-		asm volatile(	"MOV	_pxCurrentTCB, W0		\n"	/* Restore the stack pointer for the task. */				\
-						"MOV	[W0], W15				\n"																\
-						"POP	W0						\n"	/* Restore the critical nesting counter for the task. */	\
-						"MOV	W0, _uxCriticalNesting	\n"																\
-						"POP	PSVPAG					\n"																\
-						"POP	CORCON					\n"																\
-						"POP	DOENDH					\n"																\
-						"POP	DOENDL					\n"																\
-						"POP	DOSTARTH				\n"																\
-						"POP	DOSTARTL				\n"																\
-						"POP	DCOUNT					\n"																\
-						"POP	ACCBU					\n"																\
-						"POP	ACCBH					\n"																\
-						"POP	ACCBL					\n"																\
-						"POP	ACCAU					\n"																\
-						"POP	ACCAH					\n"																\
-						"POP	ACCAL					\n"																\
-						"POP	TBLPAG					\n"																\
-						"POP	RCOUNT					\n"	/* Restore the registers from the stack. */					\
-						"POP	W14						\n"																\
-						"POP.D	W12						\n"																\
-						"POP.D	W10						\n"																\
-						"POP.D	W8						\n"																\
-						"POP.D	W6						\n"																\
-						"POP.D	W4						\n"																\
-						"POP.D	W2						\n"																\
-						"POP.D	W0						\n"																\
-						"POP	SR						  " );
-
-#endif /* MPLAB_DSPIC_PORT */
-
-#ifndef portRESTORE_CONTEXT
+	#define portRESTORE_CONTEXT 	portRESTORE_CONTEXTmem 	portRESTORE_CONTEXTstart
+	#define portSAVE_CONTEXT	portSAVE_CONTEXTstart   portSAVE_CONTEXTmem
+#elif defined( __dsPIC30F__ ) || defined( __dsPIC33F__ )
+	#define portRESTORE_CONTEXT 	portRESTORE_CONTEXTmem  portRESTORE_CONTEXTdo  	portRESTORE_CONTEXTdsp  portRESTORE_CONTEXTstart
+	#define portSAVE_CONTEXT	portSAVE_CONTEXTstart   portSAVE_CONTEXTdsp     portSAVE_CONTEXTdo	portSAVE_CONTEXTmem
+#elif defined( __dsPIC33E__ )
+	#define portRESTORE_CONTEXT 	portRESTORE_CONTEXTmem 	portRESTORE_CONTEXTdsp  portRESTORE_CONTEXTstart
+	#define portSAVE_CONTEXT	portSAVE_CONTEXTstart   portSAVE_CONTEXTdsp     portSAVE_CONTEXTmem
+#else
 	#error Unrecognised device selected
-
-	/* Note:  dsPIC parts with EDS are not supported as there is no easy way to
-	recover the hardware stacked copies for DOCOUNT, DOHIGH, DOLOW. */
 #endif
+
+void vPortYieldfake() {		/* this skips the standard C pro/epilogue i.e. frame pointer (which can be optimized out */
+	asm volatile( "	.global _vPortYield" );
+	asm volatile( "_vPortYield:" );
+	asm volatile( portSAVE_CONTEXT );
+	asm volatile( portSAVE_CONTEXTend );
+	vTaskSwitchContext();
+	asm volatile( "restoreContext:" );
+	asm volatile( portRESTORE_CONTEXTend );
+	asm volatile( portRESTORE_CONTEXT );
+	asm volatile( "return" );
+}
 
 /*
  * Setup the timer used to generate the tick interrupt.
@@ -159,6 +215,39 @@ void vApplicationSetupTickTimerInterrupt( void );
 /*
  * See header file for description.
  */
+
+#if 1
+StackType_t *pxPortInitialiseStack( StackType_t *pxTopOfStack, TaskFunction_t pxCode, void *pvParameters )
+{
+	uint16_t stack_save2, stack_save3;
+	/* Setup the stack as if a yield had occurred.
+
+	Save the low bytes of the program counter. */
+	*pxTopOfStack++ = ( StackType_t ) pxCode;
+	/* Save the high byte of the program counter.  This will always be zero
+	here as it is passed in a 16bit pointer.  If the address is greater than
+	16 bits then the pointer will point to a jump table. */
+	*pxTopOfStack++ = 0;
+
+	/* the following is a little awkward, but has the advantage that it mimics vPortYield */
+	asm volatile( "MOV W15,%0" :"=r" (stack_save2): );
+	asm volatile( "MOV %0,W0" : :"g" (pvParameters) ); /* pretend we're passing pvParameters */
+	asm volatile( portSAVE_CONTEXT );
+	asm volatile( "MOV W15,%0" :"=r" (stack_save3):);
+	memcpy( pxTopOfStack, (char *)stack_save2, stack_save3-stack_save2 );
+	asm volatile( "MOV %0,W15" : :"r" (stack_save2): );	/* pop off the context stack frame */
+	*pxTopOfStack = ( StackType_t ) 0;					/* clear the SR register  */
+
+	pxTopOfStack += ( stack_save3-stack_save2 ) / sizeof( StackType_t );
+	/* Finally the critical nesting depth. */
+	*pxTopOfStack++ = 0x00;
+	/* the following is done by the macro portSETUP_TCB */
+//	*pxTopOfStack++ = ( StackType_t )pxEndOfStack-16;			/* SPLIM - enough space for the exception handler */
+	return pxTopOfStack;
+}
+
+
+#else
 StackType_t *pxPortInitialiseStack( StackType_t *pxTopOfStack, TaskFunction_t pxCode, void *pvParameters )
 {
 uint16_t usCode;
@@ -184,18 +273,20 @@ const StackType_t xInitialStack[] =
 	0xabac, /* TBLPAG */
 
 	/* dsPIC specific registers. */
-	#ifdef MPLAB_DSPIC_PORT
+	#ifdef __HAS_DSP__
 		0x0202, /* ACCAL */
 		0x0303, /* ACCAH */
 		0x0404, /* ACCAU */
 		0x0505, /* ACCBL */
 		0x0606, /* ACCBH */
 		0x0707, /* ACCBU */
+		#ifndef __dsPIC33E__
 		0x0808, /* DCOUNT */
 		0x090a, /* DOSTARTL */
 		0x1010, /* DOSTARTH */
 		0x1110, /* DOENDL */
 		0x1212, /* DOENDH */
+		#endif
 	#endif
 };
 
@@ -245,6 +336,7 @@ const StackType_t xInitialStack[] =
 
 	return pxTopOfStack;
 }
+#endif
 /*-----------------------------------------------------------*/
 
 BaseType_t xPortStartScheduler( void )
@@ -252,11 +344,9 @@ BaseType_t xPortStartScheduler( void )
 	/* Setup a timer for the tick ISR. */
 	vApplicationSetupTickTimerInterrupt();
 
-	/* Restore the context of the first task to run. */
-	portRESTORE_CONTEXT();
-
-	/* Simulate the end of the yield function. */
-	asm volatile ( "return" );
+	/* Restore the context of the first task to run.
+	   big cheat - jump into the tail end of vPortYield */
+	asm volatile( "goto restoreContext " );
 
 	/* Should not reach here. */
 	return pdTRUE;
@@ -320,14 +410,47 @@ void vPortExitCritical( void )
 }
 /*-----------------------------------------------------------*/
 
+/* This function stores the IPL of the ISR running and then sets the IPL register
+to the maximum (Kernel's tick interrupt priority). It's abstracted by the macro
+portSET_INTERRUPT_MASK_FROM_ISR() and is used to protect operations inside
+"FromISR" functions, that don't use Critical Sections, when nested interrupts
+are enabled. The IPL value must be restored afterwards with the macro
+portCLEAR_INTERRUPT_MASK_FROM_ISR(). */
+UBaseType_t uxPortSetISRMask( void )
+{
+    UBaseType_t uxRetIPL = 0;
+    SET_AND_SAVE_CPU_IPL(uxRetIPL, configKERNEL_INTERRUPT_PRIORITY);
+    return uxRetIPL;
+}
+/*-----------------------------------------------------------*/
+
+/* To work with nested interrupts, the Tick must evaluate if there is an ISR executing
+before performing a Yield, since it can interrupt every other ISR (Tick's priority is the
+highest of all). But, performing a Yield implicates changing the value of the IPL register
+to protect the Yield and, afterwards, to 0. This allows any interrupt to fire including an
+interrupt interrupted by the tick. If the Tick must perform a Yield during an ISR (nested
+or not), the Yield is delayed and this condition is stored so the last ISR remaining correctly
+performs it (delaying this Yield for the processing time of all ISRs executing). */
 void __attribute__((__interrupt__, auto_psv)) configTICK_INTERRUPT_HANDLER( void )
 {
-	/* Clear the timer interrupt. */
+	/* Clears the timer interrupt. */
 	IFS0bits.T1IF = 0;
 
-	if( xTaskIncrementTick() != pdFALSE )
-	{
-		portYIELD();
-	}
-}
+    /* Increments Tick and checks if yield is needed. */
+    if( xTaskIncrementTick() == pdTRUE )
+    {
+        /* Checks if an ISR is executing. */
+        if( uxISRProcNesting == 0 )
+        {
+            /* Not executing, so Yields. */
+            portYIELD();
+        }
+        else
+        {
+            /* Holds Yield until every ISR finishes. */
+            uxYieldDelayed = pdTRUE;
 
+            /* Note that the Yield will be performed by the last ISR nested. */
+        }
+    }
+}
